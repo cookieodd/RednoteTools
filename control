@@ -1,8 +1,8 @@
 Package: com.cookie.rednotetools
 Name: RednoteTools
-Version: 1.0
+Version: 1.2.3
 Architecture: iphoneos-arm
-Description: 小红书去水印下载工具。支持笔记图片/视频/Live Photo去水印保存，评论区图片/Live Photo/表情包保存，批量下载等功能。
+Description: 小红书 9.52 去水印（图/视频/Live Photo、批量、评论图、评论表情）
 Maintainer: COOKIEODD <https://t.me/COOKIEODD>
 Author: COOKIEODD
 Homepage: https://t.me/COOKIEODD
