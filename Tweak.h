@@ -8,6 +8,10 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <Photos/Photos.h>
+#import <AVFoundation/AVFoundation.h>
+#import <ImageIO/ImageIO.h>
+#import <CoreImage/CoreImage.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 @class _TtC11XYNoteBasic12ImageBrowser;
 
@@ -109,7 +113,6 @@
 - (void)xhs_saveMeme;
 - (UIImageView *)xhs_findImageViewInView:(UIView *)view;
 - (void)xhs_image:(UIImage *)image didFinishSavingWithError:(NSError *)error contextInfo:(void *)contextInfo;
-- (void)xhs_showToast:(NSString *)message;
 @end
 
 @interface UIColor (XYHomeModule)
@@ -137,6 +140,7 @@
 - (void)xhs_layoutButtons;
 - (void)xhs_saveCurrent;
 - (void)xhs_saveAll;
+- (void)xhs_saveSticker;
 - (void)xhs_saveAllStep:(long long)index amount:(long long)amount ok:(long long)okN fail:(long long)failN;
 - (long long)xhs_currentIndex;
 - (void)xhs_saveIndex:(long long)index waitScroll:(BOOL)wait completion:(void (^)(BOOL success))completion;

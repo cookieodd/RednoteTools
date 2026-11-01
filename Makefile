@@ -14,7 +14,7 @@ TWEAK_NAME = RednoteTools
 
 RednoteTools_FILES = Tweak.xm
 RednoteTools_CFLAGS = -fobjc-arc -Wno-unused-variable
-RednoteTools_FRAMEWORKS = UIKit Foundation Photos
+RednoteTools_FRAMEWORKS = UIKit Foundation Photos AVFoundation ImageIO CoreImage UniformTypeIdentifiers CoreMedia CoreVideo
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 

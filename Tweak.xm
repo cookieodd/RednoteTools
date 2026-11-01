@@ -7,17 +7,23 @@
 static const NSInteger kRNTBarTag = 77770;
 static const NSInteger kRNTOneTag = 77771;
 static const NSInteger kRNTAllTag = 77772;
+static const NSInteger kRNTMemeTag = 77773;
 static const NSInteger kRNTToastTag = 77780;
 static const NSInteger kRNTHudTag = 77790;
 static const NSInteger kRNTHudTitleTag = 77791;
-static const NSInteger kRNTHudSubTag = 77792;
-static const NSInteger kRNTHudTrackTag = 77793;
 static const NSInteger kRNTHudFillTag = 77794;
 static const NSInteger kRNTHudPctTag = 77795;
 static const CGFloat kRNTBtnH = 32.0;
 static const CGFloat kRNTBtnW = 76.0;
 static const CGFloat kRNTGap = 8.0;
+static const CGFloat kRNTBarW = kRNTBtnW * 3.0 + kRNTGap * 2.0;
 static const CGFloat kRNTBarBottom = 24.0;
+static const CGFloat kRNTHudW = kRNTBarW;
+static const CGFloat kRNTHudH = 44.0;
+static const CGFloat kRNTHudGap = 24.0;
+static const NSTimeInterval kRNTPollFirst = 0.22;
+static const NSTimeInterval kRNTPollStep = 0.16;
+static const NSInteger kRNTPollTries = 10;
 
 typedef NS_ENUM(NSInteger, RNTHudKind) {
     RNTHudKindNone = 0,
@@ -169,6 +175,81 @@ static UIWindow *RNTKeyWindow(void) {
     return [UIApplication sharedApplication].windows.firstObject;
 }
 
+static UIView *RNTFindTagged(NSInteger tag) {
+    UIWindow *key = RNTKeyWindow();
+    UIView *view = [key viewWithTag:tag];
+    if (view) return view;
+    for (UIWindowScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        for (UIWindow *window in scene.windows) {
+            if (window == key) continue;
+            view = [window viewWithTag:tag];
+            if (view) return view;
+        }
+    }
+    return nil;
+}
+
+static BOOL RNTBarRectInHost(UIView *host, CGRect *outRect) {
+    if (!host || !outRect) return NO;
+    UIView *bar = [host viewWithTag:kRNTBarTag];
+    if (!bar) bar = RNTFindTagged(kRNTBarTag);
+    if (!bar || bar.hidden || bar.alpha <= 0.05) return NO;
+    CGRect barRect = [bar convertRect:bar.bounds toView:host];
+    if (bar.window && host != bar && bar.window != host && [host isKindOfClass:[UIWindow class]]) {
+        CGRect inWindow = [bar convertRect:bar.bounds toView:bar.window];
+        barRect = [(UIWindow *)host convertRect:inWindow fromWindow:bar.window];
+    }
+    if (CGRectGetHeight(barRect) <= 1.0) return NO;
+    *outRect = barRect;
+    return YES;
+}
+
+static CGFloat RNTBarSlotY(UIView *host, CGFloat floatH) {
+    CGFloat insetB = MAX(kRNTBarBottom, host.safeAreaInsets.bottom + 12.0);
+    return CGRectGetHeight(host.bounds) - insetB - kRNTBtnH - kRNTHudGap - floatH;
+}
+
+static void RNTPlaceFloat(UIView *box, CGFloat width, CGFloat height, BOOL barSlotIfMissing) {
+    UIView *host = box.superview;
+    if (!host) return;
+    CGFloat maxW = CGRectGetWidth(host.bounds) - 16.0;
+    if (maxW >= 80 && width > maxW) width = maxW;
+    if (width < 1) width = 120;
+    if (height < 1) height = 36;
+    CGFloat x = (CGRectGetWidth(host.bounds) - width) / 2.0;
+    CGFloat y = (CGRectGetHeight(host.bounds) - height) / 2.0;
+    CGRect barRect;
+    if (RNTBarRectInHost(host, &barRect)) {
+        x = CGRectGetMidX(barRect) - width / 2.0;
+        y = CGRectGetMinY(barRect) - kRNTHudGap - height;
+        if (y < 8) y = RNTBarSlotY(host, height);
+    } else if (barSlotIfMissing) {
+        y = RNTBarSlotY(host, height);
+    }
+    if (x < 8) x = 8;
+    if (y < 8) y = 8;
+    CGFloat maxX = CGRectGetWidth(host.bounds) - 8.0 - width;
+    if (maxX >= 8 && x > maxX) x = maxX;
+    box.frame = CGRectMake(x, y, width, height);
+}
+
+static void RNTHudPlace(UIView *box) {
+    CGFloat hudW = MAX(kRNTHudW, CGRectGetWidth(box.bounds));
+    RNTPlaceFloat(box, hudW, kRNTHudH, YES);
+}
+
+static void RNTReanchorFloats(void) {
+    UIView *hud = RNTFindTagged(kRNTHudTag);
+    if (hud) RNTHudPlace(hud);
+    UIView *toast = RNTFindTagged(kRNTToastTag);
+    if (!toast) return;
+    CGFloat w = CGRectGetWidth(toast.bounds);
+    CGFloat h = CGRectGetHeight(toast.bounds);
+    if (w < 1) w = CGRectGetWidth(toast.frame);
+    if (h < 1) h = CGRectGetHeight(toast.frame);
+    RNTPlaceFloat(toast, w, h, NO);
+}
+
 static void RNTToast(NSString *text) {
     dispatch_async(dispatch_get_main_queue(), ^{
         UIWindow *window = RNTKeyWindow();
@@ -178,15 +259,16 @@ static void RNTToast(NSString *text) {
         toast.tag = kRNTToastTag;
         toast.text = text;
         toast.textColor = UIColor.whiteColor;
-        toast.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.72];
+        toast.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.82];
         toast.textAlignment = NSTextAlignmentCenter;
-        toast.font = [UIFont systemFontOfSize:14];
-        toast.layer.cornerRadius = 8;
+        toast.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
         toast.clipsToBounds = YES;
         [toast sizeToFit];
-        toast.frame = CGRectMake(0, 0, MAX(120, toast.frame.size.width + 28), 36);
-        toast.center = CGPointMake(CGRectGetMidX(window.bounds), CGRectGetMidY(window.bounds));
+        CGFloat tw = MAX(120, toast.bounds.size.width + 28);
+        toast.bounds = CGRectMake(0, 0, tw, 36);
+        toast.layer.cornerRadius = 18;
         [window addSubview:toast];
+        RNTPlaceFloat(toast, tw, 36, NO);
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             [UIView animateWithDuration:0.25 animations:^{ toast.alpha = 0; } completion:^(BOOL finished) { [toast removeFromSuperview]; }];
         });
@@ -197,44 +279,40 @@ static UIView *RNTHudBox(void) {
     UIWindow *window = RNTKeyWindow();
     if (!window) return nil;
     [[window viewWithTag:kRNTToastTag] removeFromSuperview];
-    UIView *box = [window viewWithTag:kRNTHudTag];
+    UIView *box = RNTFindTagged(kRNTHudTag);
+    UIView *fill = [box viewWithTag:kRNTHudFillTag];
+    CGFloat boxH = CGRectGetHeight(box.bounds);
+    if (box && (fill.superview != box || boxH < kRNTHudH - 0.5 || boxH > kRNTHudH + 0.5)) {
+        [box removeFromSuperview];
+        box = nil;
+    }
     if (box) return box;
-    box = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 220, 92)];
+
+    box = [[UIView alloc] initWithFrame:CGRectMake(0, 0, kRNTHudW, kRNTHudH)];
     box.tag = kRNTHudTag;
+    box.userInteractionEnabled = NO;
     box.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.82];
-    box.layer.cornerRadius = 12;
+    box.layer.cornerRadius = kRNTHudH / 2.0;
     box.clipsToBounds = YES;
 
-    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(16, 14, 188, 20)];
+    fill = [[UIView alloc] initWithFrame:CGRectZero];
+    fill.tag = kRNTHudFillTag;
+    fill.userInteractionEnabled = NO;
+    fill.backgroundColor = [UIColor colorWithRed:1.0 green:0.141 blue:0.259 alpha:1.0];
+
+    UILabel *title = [[UILabel alloc] init];
     title.tag = kRNTHudTitleTag;
-    title.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+    title.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     title.textColor = UIColor.whiteColor;
 
-    UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(16, 36, 188, 16)];
-    sub.tag = kRNTHudSubTag;
-    sub.font = [UIFont systemFontOfSize:12];
-    sub.textColor = [UIColor colorWithWhite:1 alpha:0.7];
-
-    UIView *track = [[UIView alloc] initWithFrame:CGRectMake(16, 58, 188, 4)];
-    track.tag = kRNTHudTrackTag;
-    track.backgroundColor = [UIColor colorWithWhite:1 alpha:0.18];
-    track.layer.cornerRadius = 2;
-    track.clipsToBounds = YES;
-
-    UIView *fill = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 0, 4)];
-    fill.tag = kRNTHudFillTag;
-    fill.backgroundColor = [UIColor colorWithRed:1.0 green:0.141 blue:0.259 alpha:1.0];
-    [track addSubview:fill];
-
-    UILabel *pct = [[UILabel alloc] initWithFrame:CGRectMake(16, 66, 188, 16)];
+    UILabel *pct = [[UILabel alloc] init];
     pct.tag = kRNTHudPctTag;
-    pct.font = [UIFont systemFontOfSize:12];
-    pct.textColor = [UIColor colorWithWhite:1 alpha:0.7];
+    pct.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+    pct.textColor = UIColor.whiteColor;
     pct.textAlignment = NSTextAlignmentRight;
 
+    [box addSubview:fill];
     [box addSubview:title];
-    [box addSubview:sub];
-    [box addSubview:track];
     [box addSubview:pct];
     [window addSubview:box];
     return box;
@@ -245,17 +323,20 @@ static void RNTHudApply(NSString *title, NSString *subtitle, NSInteger percent) 
     if (!box) return;
     percent = MAX(0, MIN(100, percent));
     UILabel *titleL = [box viewWithTag:kRNTHudTitleTag];
-    UILabel *subL = [box viewWithTag:kRNTHudSubTag];
-    UIView *track = [box viewWithTag:kRNTHudTrackTag];
     UIView *fill = [box viewWithTag:kRNTHudFillTag];
     UILabel *pctL = [box viewWithTag:kRNTHudPctTag];
-    titleL.text = title;
-    subL.text = subtitle.length ? subtitle : @"";
+    titleL.text = (gHudKind == RNTHudKindBatch && subtitle.length) ? subtitle : title;
     pctL.text = [NSString stringWithFormat:@"%ld%%", (long)percent];
-    fill.frame = CGRectMake(0, 0, CGRectGetWidth(track.bounds) * (CGFloat)percent / 100.0, 4);
-    box.alpha = 1;
     UIView *host = box.superview;
-    if (host) box.center = CGPointMake(CGRectGetMidX(host.bounds), CGRectGetMidY(host.bounds));
+    CGFloat maxW = host ? CGRectGetWidth(host.bounds) - 16.0 : kRNTHudW;
+    CGFloat hudW = kRNTHudW;
+    if (hudW > maxW && maxW >= 80) hudW = maxW;
+    titleL.frame = CGRectMake(16, 0, hudW - 72, kRNTHudH);
+    pctL.frame = CGRectMake(hudW - 56, 0, 40, kRNTHudH);
+    fill.frame = CGRectMake(0, 0, hudW * (CGFloat)percent / 100.0, kRNTHudH);
+    box.bounds = CGRectMake(0, 0, hudW, kRNTHudH);
+    box.alpha = 1;
+    RNTHudPlace(box);
 }
 
 static void RNTHudShow(RNTHudKind kind, NSString *title, NSString *subtitle, NSInteger percent) {
@@ -280,7 +361,7 @@ static void RNTHudFinish(NSString *title) {
         RNTHudApply(title, @"", 100);
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             if (gHudGen != gen) return;
-            UIView *box = [RNTKeyWindow() viewWithTag:kRNTHudTag];
+            UIView *box = RNTFindTagged(kRNTHudTag);
             [UIView animateWithDuration:0.25 animations:^{ box.alpha = 0; } completion:^(BOOL finished) {
                 if (gHudGen != gen) return;
                 [box removeFromSuperview];
@@ -289,9 +370,9 @@ static void RNTHudFinish(NSString *title) {
     });
 }
 
-static void RNTHudSingleStage(NSString *subtitle, NSInteger percent) {
+static void RNTHudStage(NSString *title, NSInteger percent) {
     if (gHudKind != RNTHudKindSingle) return;
-    RNTHudUpdate(@"保存中", subtitle, percent);
+    RNTHudUpdate(title, nil, percent);
 }
 
 #pragma mark - Save
@@ -306,7 +387,7 @@ static void RNTSaveImageData(NSData *data, void (^completion)(BOOL success)) {
         return;
     }
     UIImage *img = [UIImage imageWithData:data];
-    RNTHudSingleStage(@"写入相册", 85);
+    RNTHudStage(@"保存中", 85);
     [[PHPhotoLibrary sharedPhotoLibrary] performChanges:^{
         if (img) {
             [PHAssetChangeRequest creationRequestForAssetFromImage:img];
@@ -329,7 +410,7 @@ static void RNTDownload(NSString *urlString, void (^done)(NSData *data)) {
         finish(nil);
         return;
     }
-    RNTHudSingleStage(@"下载", 40);
+    RNTHudStage(@"保存中", 40);
     [[[NSURLSession sharedSession] dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         finish((!error && data.length) ? data : nil);
     }] resume];
@@ -368,10 +449,10 @@ static void RNTSaveLivePhoto(NSURL *imageURL, NSURL *videoURL, void (^done)(BOOL
     NSString *videoPath = [tempDir stringByAppendingPathComponent:[NSString stringWithFormat:@"xhs_lp_%@_vid.mov", uuid]];
     NSString *outImagePath = [tempDir stringByAppendingPathComponent:[NSString stringWithFormat:@"xhs_lp_%@_out.jpg", uuid]];
     NSString *outVideoPath = [tempDir stringByAppendingPathComponent:[NSString stringWithFormat:@"xhs_lp_%@_out.mov", uuid]];
-    RNTHudSingleStage(@"下载", 32);
+    RNTHudStage(@"保存中", 32);
     RNTDownloadToPath(RNTPlainURL(imageURL) ?: imageURL.absoluteString, imagePath, ^(BOOL imgOK) {
         if (!imgOK) { finish(NO); return; }
-        RNTHudSingleStage(@"下载视频", 55);
+        RNTHudStage(@"保存中", 55);
         RNTDownloadToPath(videoURL.absoluteString, videoPath, ^(BOOL vidOK) {
             if (!vidOK) { finish(NO); return; }
             Class mgr = NSClassFromString(@"XYPKLivePhotoManager");
@@ -384,7 +465,7 @@ static void RNTSaveLivePhoto(NSURL *imageURL, NSURL *videoURL, void (^done)(BOOL
             }
             [mgr preConvertVideoToLivePhotoFormatWithInputVideoPath:videoPath outputVideoURL:outVidURL assetID:uuid completion:^(BOOL cvtOK) {
                 if (!cvtOK) { finish(NO); return; }
-                RNTHudSingleStage(@"写入相册", 85);
+                RNTHudStage(@"保存中", 85);
                 [[PHPhotoLibrary sharedPhotoLibrary] performChanges:^{
                     PHAssetCreationRequest *req = [PHAssetCreationRequest creationRequestForAsset];
                     PHAssetResourceCreationOptions *opts = [[PHAssetResourceCreationOptions alloc] init];
@@ -400,6 +481,166 @@ static void RNTSaveLivePhoto(NSURL *imageURL, NSURL *videoURL, void (^done)(BOOL
                     finish(success);
                 }];
             }];
+        });
+    });
+}
+
+static AVAssetReaderTrackOutput *RNTVideoReader(AVAsset *asset, AVAssetTrack *track, AVAssetReader **readerOut) {
+    NSError *error = nil;
+    AVAssetReader *reader = [AVAssetReader assetReaderWithAsset:asset error:&error];
+    if (!reader) return nil;
+    NSDictionary *settings = @{ (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA) };
+    AVAssetReaderTrackOutput *output = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:track outputSettings:settings];
+    output.alwaysCopiesSampleData = NO;
+    if (![reader canAddOutput:output]) return nil;
+    [reader addOutput:output];
+    if (![reader startReading]) return nil;
+    if (readerOut) *readerOut = reader;
+    return output;
+}
+
+static CGImageRef RNTCreateFrameImage(CVPixelBufferRef pixelBuffer, CGAffineTransform transform, CIContext *ctx) {
+    if (!pixelBuffer || !ctx) return NULL;
+    CIImage *image = [CIImage imageWithCVPixelBuffer:pixelBuffer];
+    if (!image) return NULL;
+    if (!CGAffineTransformIsIdentity(transform)) {
+        image = [image imageByApplyingTransform:transform];
+        CGRect extent = image.extent;
+        if (extent.origin.x != 0 || extent.origin.y != 0) {
+            image = [image imageByApplyingTransform:CGAffineTransformMakeTranslation(-extent.origin.x, -extent.origin.y)];
+            extent = image.extent;
+        }
+        image = [image imageByCroppingToRect:CGRectMake(0, 0, fabs(extent.size.width), fabs(extent.size.height))];
+    }
+    return [ctx createCGImage:image fromRect:image.extent];
+}
+
+static NSData *RNTGIFDataFromVideoURL(NSURL *fileURL, void (^progress)(NSInteger percent)) {
+    if (!fileURL) return nil;
+    AVURLAsset *asset = [AVURLAsset URLAssetWithURL:fileURL options:@{ AVURLAssetPreferPreciseDurationAndTimingKey: @YES }];
+    dispatch_semaphore_t gate = dispatch_semaphore_create(0);
+    [asset loadValuesAsynchronouslyForKeys:@[ @"tracks", @"duration" ] completionHandler:^{ dispatch_semaphore_signal(gate); }];
+    dispatch_semaphore_wait(gate, DISPATCH_TIME_FOREVER);
+    if ([asset statusOfValueForKey:@"tracks" error:nil] != AVKeyValueStatusLoaded) return nil;
+    AVAssetTrack *track = [[asset tracksWithMediaType:AVMediaTypeVideo] firstObject];
+    if (!track) return nil;
+    CGAffineTransform transform = track.preferredTransform;
+    CMTime minDuration = track.minFrameDuration;
+
+    AVAssetReader *reader = nil;
+    AVAssetReaderTrackOutput *output = RNTVideoReader(asset, track, &reader);
+    if (!output) return nil;
+    NSMutableArray<NSValue *> *times = [NSMutableArray array];
+    CMSampleBufferRef sample = NULL;
+    while ((sample = [output copyNextSampleBuffer])) {
+        CMTime pts = CMSampleBufferGetOutputPresentationTimeStamp(sample);
+        if (CMTIME_IS_VALID(pts)) [times addObject:[NSValue valueWithCMTime:pts]];
+        CFRelease(sample);
+    }
+    reader = nil;
+    output = nil;
+    NSUInteger count = times.count;
+    if (count < 2) return nil;
+    if (progress) progress(45);
+
+    output = RNTVideoReader(asset, track, &reader);
+    if (!output) return nil;
+    CIContext *ctx = [CIContext contextWithOptions:@{ kCIContextUseSoftwareRenderer: @NO }];
+    NSMutableData *gif = [NSMutableData data];
+    CGImageDestinationRef dest = CGImageDestinationCreateWithData(
+        (__bridge CFMutableDataRef)gif,
+        (__bridge CFStringRef)UTTypeGIF.identifier,
+        count,
+        NULL);
+    if (!dest) return nil;
+    NSDictionary *destProps = @{
+        (NSString *)kCGImagePropertyGIFDictionary: @{
+            (NSString *)kCGImagePropertyGIFLoopCount: @0
+        }
+    };
+    CGImageDestinationSetProperties(dest, (__bridge CFDictionaryRef)destProps);
+
+    NSUInteger index = 0;
+    BOOL ok = YES;
+    while (ok && index < count && (sample = [output copyNextSampleBuffer])) {
+        CVPixelBufferRef pixels = CMSampleBufferGetImageBuffer(sample);
+        CGImageRef image = RNTCreateFrameImage(pixels, transform, ctx);
+        CFRelease(sample);
+        if (!image) { ok = NO; break; }
+        double delay = 0;
+        CMTime pts = [times[index] CMTimeValue];
+        if (index + 1 < count) {
+            delay = CMTimeGetSeconds(CMTimeSubtract([times[index + 1] CMTimeValue], pts));
+        } else if (index > 0) {
+            delay = CMTimeGetSeconds(CMTimeSubtract(pts, [times[index - 1] CMTimeValue]));
+        }
+        if (delay <= 0 && CMTIME_IS_NUMERIC(minDuration)) delay = CMTimeGetSeconds(minDuration);
+        if (delay <= 0) delay = 1.0 / 30.0;
+        NSDictionary *frameProps = @{
+            (NSString *)kCGImagePropertyGIFDictionary: @{
+                (NSString *)kCGImagePropertyGIFDelayTime: @(delay),
+                (NSString *)kCGImagePropertyGIFUnclampedDelayTime: @(delay)
+            }
+        };
+        CGImageDestinationAddImage(dest, image, (__bridge CFDictionaryRef)frameProps);
+        CGImageRelease(image);
+        index++;
+        if (progress && count > 0) {
+            NSInteger pct = 45 + (NSInteger)llround((double)index / (double)count * 40.0);
+            progress(MIN(85, pct));
+        }
+    }
+    if (!ok || index != count || !CGImageDestinationFinalize(dest)) {
+        CFRelease(dest);
+        return nil;
+    }
+    CFRelease(dest);
+    return gif.length ? gif : nil;
+}
+
+static void RNTSaveGIFData(NSData *data, void (^done)(BOOL ok)) {
+    void (^finish)(BOOL) = ^(BOOL ok) {
+        if (!done) return;
+        dispatch_async(dispatch_get_main_queue(), ^{ done(ok); });
+    };
+    if (!data.length) {
+        finish(NO);
+        return;
+    }
+    RNTHudStage(@"表情包", 90);
+    [[PHPhotoLibrary sharedPhotoLibrary] performChanges:^{
+        PHAssetCreationRequest *req = [PHAssetCreationRequest creationRequestForAsset];
+        PHAssetResourceCreationOptions *opts = [[PHAssetResourceCreationOptions alloc] init];
+        opts.uniformTypeIdentifier = UTTypeGIF.identifier;
+        [req addResourceWithType:PHAssetResourceTypePhoto data:data options:opts];
+    } completionHandler:^(BOOL success, NSError *error) {
+        (void)error;
+        finish(success);
+    }];
+}
+
+static void RNTSaveLiveGIF(NSString *videoURLString, void (^done)(BOOL ok)) {
+    if (!videoURLString.length) {
+        if (done) done(NO);
+        return;
+    }
+    NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"xhs_gif_%@.mov", [NSUUID UUID].UUIDString]];
+    RNTHudStage(@"表情包", 28);
+    RNTDownloadToPath(videoURLString, path, ^(BOOL ok) {
+        if (!ok) {
+            if (done) done(NO);
+            return;
+        }
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSData *gif = RNTGIFDataFromVideoURL([NSURL fileURLWithPath:path], ^(NSInteger percent) {
+                RNTHudStage(@"表情包", percent);
+            });
+            [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+            if (!gif.length) {
+                dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(NO); });
+                return;
+            }
+            RNTSaveGIFData(gif, done);
         });
     });
 }
@@ -459,7 +700,49 @@ static void RNTUngrayView(UIView *view) {
     for (UIView *sub in view.subviews) RNTUngrayView(sub);
 }
 
-static UIButton *RNTMakeCapsule(NSInteger tag, NSString *title, id target, SEL action) {
+static void RNTLayoutBarButtons(UIView *bar) {
+    UIButton *one = [bar viewWithTag:kRNTOneTag];
+    UIButton *all = [bar viewWithTag:kRNTAllTag];
+    UIButton *meme = [bar viewWithTag:kRNTMemeTag];
+    one.frame = CGRectMake(0, 0, kRNTBtnW, kRNTBtnH);
+    all.frame = CGRectMake(kRNTBtnW + kRNTGap, 0, kRNTBtnW, kRNTBtnH);
+    meme.frame = CGRectMake((kRNTBtnW + kRNTGap) * 2.0, 0, kRNTBtnW, kRNTBtnH);
+}
+
+static void RNTScrollToIndex(_TtC11XYNoteBasic12ImageBrowser *browser, long long index) {
+    if (!browser) return;
+    @try { if ([browser.vm respondsToSelector:@selector(scrollTo:)]) [browser.vm scrollTo:index]; } @catch (NSException *e) {}
+    @try { if ([browser respondsToSelector:@selector(scrollTo:)]) [browser scrollTo:index]; } @catch (NSException *e) {}
+    UICollectionView *c = browser.collection;
+    if (c && index >= 0 && index < [c numberOfItemsInSection:0]) {
+        NSIndexPath *path = [NSIndexPath indexPathForItem:index inSection:0];
+        [c scrollToItemAtIndexPath:path atScrollPosition:UICollectionViewScrollPositionCenteredHorizontally animated:NO];
+        [c layoutIfNeeded];
+    }
+}
+
+static void RNTPollAfter(BOOL (^ready)(void), void (^done)(void)) {
+    __block NSInteger tries = 0;
+    __block void (^poll)(void) = nil;
+    __block __weak void (^weakPoll)(void) = nil;
+    poll = ^{
+        tries++;
+        BOOL ok = ready ? ready() : YES;
+        if (ok || tries >= kRNTPollTries) {
+            if (done) done();
+            return;
+        }
+        void (^next)(void) = weakPoll;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kRNTPollStep * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (next) next();
+        });
+    };
+    poll = [poll copy];
+    weakPoll = poll;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kRNTPollFirst * NSEC_PER_SEC)), dispatch_get_main_queue(), poll);
+}
+
+static UIButton *RNTMakeCapsule(NSInteger tag, NSString *title, NSString *symbol, id target, SEL action) {
     UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
     btn.tag = tag;
     btn.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.55];
@@ -469,7 +752,8 @@ static UIButton *RNTMakeCapsule(NSInteger tag, NSString *title, id target, SEL a
     btn.tintColor = UIColor.whiteColor;
     btn.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
     UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:12 weight:UIImageSymbolWeightMedium];
-    [btn setImage:[UIImage systemImageNamed:@"photo" withConfiguration:config] forState:UIControlStateNormal];
+    UIImage *icon = [UIImage systemImageNamed:symbol.length ? symbol : @"photo" withConfiguration:config];
+    [btn setImage:icon forState:UIControlStateNormal];
     [btn setTitle:title forState:UIControlStateNormal];
     [btn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
     btn.imageEdgeInsets = UIEdgeInsetsMake(0, -1, 0, 3);
@@ -558,7 +842,7 @@ static UIButton *RNTMakeCapsule(NSInteger tag, NSString *title, id target, SEL a
                 RNTKVC(info, @"livePhotoVideoUrl"),
                 RNTKVC(info, @"url"));
     gInterceptingNativeSave = YES;
-    RNTHudShow(RNTHudKindSingle, @"保存中", @"准备", 8);
+    RNTHudShow(RNTHudKindSingle, @"保存中", nil, 8);
     RNTSaveFromInfo(info, ^(BOOL ok) {
         gInterceptingNativeSave = NO;
         RNTHudFinish(ok ? @"已保存" : @"保存失败");
@@ -727,10 +1011,10 @@ static UIButton *RNTMakeCapsule(NSInteger tag, NSString *title, id target, SEL a
     [saveBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
     [saveBtn setTitle:@"保存表情" forState:UIControlStateNormal];
     CGRect addBtnFrame = self.frame;
-    saveBtn.frame = CGRectMake(addBtnFrame.origin.x,
+    saveBtn.frame = CGRectMake(addBtnFrame.origin.x, 
                                addBtnFrame.origin.y - addBtnFrame.size.height - 12,
-                               addBtnFrame.size.width,
-                               addBtnFrame.size.height);
+                                addBtnFrame.size.width, 
+                                addBtnFrame.size.height);
     [saveBtn addTarget:self action:@selector(xhs_saveMeme) forControlEvents:UIControlEventTouchUpInside];
     [superview addSubview:saveBtn];
 }
@@ -760,14 +1044,19 @@ static UIButton *RNTMakeCapsule(NSInteger tag, NSString *title, id target, SEL a
             }
             NSURL *memeUrl = RNTKVC(responder, @"memeUrl");
             if (memeUrl) {
-                [self xhs_showToast:@"正在保存..."];
+                RNTToast(@"正在保存...");
                 RNTDownload(RNTURLString(memeUrl), ^(NSData *data) {
-                    if (!data) { [self xhs_showToast:@"保存失败"]; return; }
+                    if (!data) {
+                        RNTToast(@"保存失败");
+                        return;
+                    }
                     UIImage *image = [UIImage imageWithData:data];
                     if (image) {
                         UIImageWriteToSavedPhotosAlbum(image, self, @selector(xhs_image:didFinishSavingWithError:contextInfo:), nil);
                     } else {
-                        RNTSaveImageData(data, ^(BOOL ok) { [self xhs_showToast:ok ? @"已保存到相册" : @"保存失败"]; });
+                        RNTSaveImageData(data, ^(BOOL ok) {
+                            RNTToast(ok ? @"已保存到相册" : @"保存失败");
+                        });
                     }
                 });
                 return;
@@ -775,7 +1064,7 @@ static UIButton *RNTMakeCapsule(NSInteger tag, NSString *title, id target, SEL a
         }
         responder = responder.nextResponder;
     }
-    [self xhs_showToast:@"保存失败"];
+    RNTToast(@"保存失败");
 }
 
 %new
@@ -794,11 +1083,8 @@ static UIButton *RNTMakeCapsule(NSInteger tag, NSString *title, id target, SEL a
 
 %new
 - (void)xhs_image:(UIImage *)image didFinishSavingWithError:(NSError *)error contextInfo:(void *)contextInfo {
-    [self xhs_showToast:error ? @"保存失败" : @"已保存到相册"];
+    RNTToast(error ? @"保存失败" : @"已保存到相册");
 }
-
-%new
-- (void)xhs_showToast:(NSString *)message { RNTToast(message); }
 %end
 
 #pragma mark - Image browser
@@ -814,7 +1100,10 @@ static UIButton *RNTMakeCapsule(NSInteger tag, NSString *title, id target, SEL a
 %hook _TtC11XYNoteBasic12ImageBrowser
 - (void)didMoveToSuperview {
     %orig;
-    if (self.superview) [self xhs_installButtons];
+    if (self.superview) {
+        [self xhs_installButtons];
+        [self xhs_layoutButtons];
+    }
 }
 
 - (void)layoutSubviews {
@@ -844,7 +1133,7 @@ static UIButton *RNTMakeCapsule(NSInteger tag, NSString *title, id target, SEL a
     UIView *bar = [self viewWithTag:kRNTBarTag];
     UIView *v = touch.view;
     while (v) {
-        if (v == bar || v.tag == kRNTBarTag || v.tag == kRNTOneTag || v.tag == kRNTAllTag) return NO;
+        if (v == bar || v.tag == kRNTBarTag || v.tag == kRNTOneTag || v.tag == kRNTAllTag || v.tag == kRNTMemeTag) return NO;
         v = v.superview;
     }
     return %orig;
@@ -865,11 +1154,14 @@ static UIButton *RNTMakeCapsule(NSInteger tag, NSString *title, id target, SEL a
     UIView *old = [self viewWithTag:kRNTBarTag];
     UIButton *existing = [old viewWithTag:kRNTOneTag];
     UIButton *existingAll = [old viewWithTag:kRNTAllTag];
+    UIButton *existingMeme = [old viewWithTag:kRNTMemeTag];
     BOOL same = old
         && [[existing titleForState:UIControlStateNormal] isEqualToString:@"单张"]
+        && [[existingMeme titleForState:UIControlStateNormal] isEqualToString:@"表情包"]
         && CGRectGetWidth(existing.frame) == kRNTBtnW
         && CGRectGetHeight(existing.frame) == kRNTBtnH
-        && CGRectGetMinX(existingAll.frame) > 1;
+        && CGRectGetMinX(existingAll.frame) > 1
+        && CGRectGetMinX(existingMeme.frame) > CGRectGetMinX(existingAll.frame);
     if (same) return;
     [old removeFromSuperview];
 
@@ -877,13 +1169,12 @@ static UIButton *RNTMakeCapsule(NSInteger tag, NSString *title, id target, SEL a
     bar.tag = kRNTBarTag;
     bar.userInteractionEnabled = YES;
     bar.exclusiveTouch = YES;
-    UIButton *one = RNTMakeCapsule(kRNTOneTag, @"单张", self, @selector(xhs_saveCurrent));
-    UIButton *all = RNTMakeCapsule(kRNTAllTag, @"全部", self, @selector(xhs_saveAll));
-    one.frame = CGRectMake(0, 0, kRNTBtnW, kRNTBtnH);
-    all.frame = CGRectMake(kRNTBtnW + kRNTGap, 0, kRNTBtnW, kRNTBtnH);
-    bar.frame = CGRectMake(0, 0, kRNTBtnW * 2.0 + kRNTGap, kRNTBtnH);
+    UIButton *one = RNTMakeCapsule(kRNTOneTag, @"单张", @"photo", self, @selector(xhs_saveCurrent));
+    UIButton *all = RNTMakeCapsule(kRNTAllTag, @"全部", @"photo", self, @selector(xhs_saveAll));
+    UIButton *meme = RNTMakeCapsule(kRNTMemeTag, @"表情包", @"face.smiling", self, @selector(xhs_saveSticker));
     [bar addSubview:one];
     [bar addSubview:all];
+    [bar addSubview:meme];
     [self addSubview:bar];
 }
 
@@ -891,24 +1182,17 @@ static UIButton *RNTMakeCapsule(NSInteger tag, NSString *title, id target, SEL a
 - (void)xhs_layoutButtons {
     UIView *bar = [self viewWithTag:kRNTBarTag];
     if (!bar) return;
-    UIButton *one = [bar viewWithTag:kRNTOneTag];
-    UIButton *all = [bar viewWithTag:kRNTAllTag];
-    one.frame = CGRectMake(0, 0, kRNTBtnW, kRNTBtnH);
-    all.frame = CGRectMake(kRNTBtnW + kRNTGap, 0, kRNTBtnW, kRNTBtnH);
-    CGFloat barW = kRNTBtnW * 2.0 + kRNTGap;
-    CGFloat barH = kRNTBtnH;
-    CGFloat insetB = kRNTBarBottom;
-    if (@available(iOS 11.0, *)) {
-        insetB = MAX(kRNTBarBottom, self.safeAreaInsets.bottom + 12.0);
-    }
-    CGFloat x = (self.bounds.size.width - barW) / 2.0;
-    CGFloat y = self.bounds.size.height - insetB - barH;
+    RNTLayoutBarButtons(bar);
+    CGFloat insetB = MAX(kRNTBarBottom, self.safeAreaInsets.bottom + 12.0);
+    CGFloat x = (self.bounds.size.width - kRNTBarW) / 2.0;
+    CGFloat y = self.bounds.size.height - insetB - kRNTBtnH;
     if (x < 8) x = 8;
     if (y < 8) y = 8;
-    bar.frame = CGRectMake(x, y, barW, barH);
+    bar.frame = CGRectMake(x, y, kRNTBarW, kRNTBtnH);
     bar.hidden = NO;
     bar.alpha = 1;
     [self bringSubviewToFront:bar];
+    RNTReanchorFloats();
 }
 
 %new
@@ -920,8 +1204,44 @@ static UIButton *RNTMakeCapsule(NSInteger tag, NSString *title, id target, SEL a
 }
 
 %new
+- (void)xhs_saveSticker {
+    long long index = [self xhs_currentIndex];
+    NSString *noteId = self.noteId;
+    NSIndexPath *path = [NSIndexPath indexPathForItem:index inSection:0];
+    RNTCacheCell([self.collection cellForItemAtIndexPath:path], noteId, index);
+    NSDictionary *cached = noteId ? imageUrlCache[RNTCacheKey(noteId, index)] : nil;
+    void (^startGIF)(NSString *) = ^(NSString *live) {
+        RNTHudShow(RNTHudKindSingle, @"表情包", nil, 8);
+        RNTSaveLiveGIF(live, ^(BOOL ok) {
+            RNTHudFinish(ok ? @"已保存" : @"保存失败");
+        });
+    };
+    NSString *live = cached[@"liveVideo"];
+    if (live.length) {
+        startGIF(live);
+        return;
+    }
+    RNTScrollToIndex(self, index);
+    __weak typeof(self) weakSelf = self;
+    RNTPollAfter(^BOOL{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return YES;
+        RNTCacheCell([strongSelf.collection cellForItemAtIndexPath:path], noteId, index);
+        NSDictionary *again = noteId ? imageUrlCache[RNTCacheKey(noteId, index)] : nil;
+        return [again[@"liveVideo"] length] > 0;
+    }, ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        NSDictionary *again = noteId ? imageUrlCache[RNTCacheKey(noteId, index)] : nil;
+        NSString *ready = again[@"liveVideo"];
+        if (ready.length) startGIF(ready);
+        else RNTToast(@"当前不是 Live Photo");
+    });
+}
+
+%new
 - (void)xhs_saveCurrent {
-    RNTHudShow(RNTHudKindSingle, @"保存中", @"准备", 8);
+    RNTHudShow(RNTHudKindSingle, @"保存中", nil, 8);
     [self xhs_saveIndex:[self xhs_currentIndex] waitScroll:YES completion:^(BOOL ok) {
         RNTHudFinish(ok ? @"已保存" : @"保存失败");
     }];
@@ -993,32 +1313,19 @@ static UIButton *RNTMakeCapsule(NSInteger tag, NSString *title, id target, SEL a
     }
 
     if (wait) {
-        @try { if ([self.vm respondsToSelector:@selector(scrollTo:)]) [self.vm scrollTo:index]; } @catch (NSException *e) {}
-        @try { if ([self respondsToSelector:@selector(scrollTo:)]) [self scrollTo:index]; } @catch (NSException *e) {}
-        UICollectionView *c = self.collection;
-        if (c && index >= 0 && index < [c numberOfItemsInSection:0]) {
-            [c scrollToItemAtIndexPath:path atScrollPosition:UICollectionViewScrollPositionCenteredHorizontally animated:NO];
-            [c layoutIfNeeded];
-        }
-        __block NSInteger tries = 0;
-        __block void (^poll)(void) = nil;
-        __block __weak void (^weakPoll)(void) = nil;
-        poll = ^{
-            tries++;
-            RNTCacheCell([self.collection cellForItemAtIndexPath:path], noteId, index);
+        RNTScrollToIndex(self, index);
+        __weak typeof(self) weakSelf = self;
+        RNTPollAfter(^BOOL{
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) return YES;
+            RNTCacheCell([strongSelf.collection cellForItemAtIndexPath:path], noteId, index);
             NSDictionary *again = noteId ? imageUrlCache[RNTCacheKey(noteId, index)] : nil;
-            if (again[@"url"] || again[@"liveVideo"] || tries >= 10) {
-                [self xhs_saveIndex:index waitScroll:NO completion:completion];
-                return;
-            }
-            void (^next)(void) = weakPoll;
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.16 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                if (next) next();
-            });
-        };
-        poll = [poll copy];
-        weakPoll = poll;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.22 * NSEC_PER_SEC)), dispatch_get_main_queue(), poll);
+            return again[@"url"] || again[@"liveVideo"];
+        }, ^{
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) return;
+            [strongSelf xhs_saveIndex:index waitScroll:NO completion:completion];
+        });
         return;
     }
 
